@@ -1,0 +1,3 @@
+# Run all tests with verbose output
+test:
+    go test -v ./...
