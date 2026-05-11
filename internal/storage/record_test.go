@@ -16,7 +16,7 @@ func TestEntryMarshalUnmarshal(t *testing.T) {
 	data, err := original.MarshalBinary()
 
 	assert.NoError(t, err)
-	assert.Len(t, data, 48)
+	assert.Len(t, data, EntrySize)
 
 	var decoded Entry
 	err = decoded.UnmarshalBinary(data)

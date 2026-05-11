@@ -25,7 +25,7 @@ func TestOpenWAL_CreatesFile(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestWAL_Flusher_SortsAndPersists(t *testing.T) {
+func TestWAL_Flush_SortsAndPersists(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/active.wal"
 	wal, err := OpenWAL(path)
@@ -35,22 +35,10 @@ func TestWAL_Flusher_SortsAndPersists(t *testing.T) {
 	require.NoError(t, wal.Append(&Entry{Timestamp: 1, Value: 10, MetricHash: sha256.Sum256([]byte("cpu"))}))
 	require.NoError(t, wal.Append(&Entry{Timestamp: 2, Value: 20, MetricHash: sha256.Sum256([]byte("mem"))}))
 
-	require.NoError(t, wal.Flusher())
+	require.NoError(t, wal.Flush())
 
-	// Verify segment file was created
-	entries, err := os.ReadDir(dir)
-	require.NoError(t, err)
-	require.Len(t, entries, 2) // active.wal + one .seg file
-
-	var segFile string
-	for _, e := range entries {
-		if !e.IsDir() && len(e.Name()) > 4 && e.Name()[len(e.Name())-4:] == ".seg" {
-			segFile = dir + "/" + e.Name()
-			break
-		}
-	}
-	require.NotEmpty(t, segFile, "expected a .seg file")
-
+	// Flusher names the segment after the data range: min-max.seg
+	segFile := dir + "/1-3.seg"
 	got, err := ReadSegment(segFile)
 	require.NoError(t, err)
 	require.Len(t, got, 3)
@@ -60,7 +48,8 @@ func TestWAL_Flusher_SortsAndPersists(t *testing.T) {
 	assert.Equal(t, int64(2), got[1].Timestamp)
 	assert.Equal(t, int64(3), got[2].Timestamp)
 
-	wal.Close()
+	err = wal.Close()
+	require.NoError(t, err)
 }
 
 func TestWAL_AppendIncreasesSize(t *testing.T) {
@@ -74,7 +63,7 @@ func TestWAL_AppendIncreasesSize(t *testing.T) {
 		MetricHash: sha256.Sum256([]byte("cpu")),
 	})
 	require.NoError(t, err)
-	assert.EqualValues(t, 48, wal.Size())
+	assert.EqualValues(t, EntrySize, wal.Size())
 
 	err = wal.Append(&Entry{
 		Timestamp:  200,
@@ -82,7 +71,7 @@ func TestWAL_AppendIncreasesSize(t *testing.T) {
 		MetricHash: sha256.Sum256([]byte("mem")),
 	})
 	require.NoError(t, err)
-	assert.EqualValues(t, 96, wal.Size())
+	assert.EqualValues(t, EntrySize*2, wal.Size())
 
 	err = wal.Close()
 	require.NoError(t, err)

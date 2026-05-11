@@ -1,24 +1,20 @@
 package storage
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path"
 	"slices"
-	"strconv"
 	"sync"
-	"time"
+	"sync/atomic"
 )
+
+const WALMaxSize = 10 << 20 // 10 MB
 
 func sortTimestamps(data []Entry) []Entry {
 	slices.SortFunc(data, func(a, b Entry) int {
-		if a.Timestamp < b.Timestamp {
-			return -1
-		}
-		if a.Timestamp > b.Timestamp {
-			return 1
-		}
-		return 0
+		return cmp.Compare(a.Timestamp, b.Timestamp)
 	})
 	return data
 }
@@ -26,48 +22,52 @@ func sortTimestamps(data []Entry) []Entry {
 type WAL struct {
 	f           *os.File
 	path        string
-	currentSize int64
+	currentSize atomic.Int64
 	mu          sync.Mutex
 }
 
 func OpenWAL(path string) (*WAL, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o644)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open file %s: %v", path, err)
+		return nil, fmt.Errorf("failed to open file %s: %w", path, err)
 	}
 
 	info, err := file.Stat()
 	if err != nil {
 		_ = file.Close()
-		return nil, fmt.Errorf("failed to get file size for %s: %v", path, err)
+		return nil, fmt.Errorf("failed to get file size for %s: %w", path, err)
 	}
 
-	return &WAL{
-		f:           file,
-		path:        path,
-		currentSize: info.Size(),
-	}, nil
+	w := &WAL{
+		f:    file,
+		path: path,
+	}
+	w.currentSize.Store(info.Size())
+	return w, nil
 }
 
 func (w *WAL) Append(e *Entry) error {
 	data, err := e.MarshalBinary()
 	if err != nil {
-		return fmt.Errorf("failed to marshal entry to binary: %v", err)
+		return fmt.Errorf("failed to marshal entry to binary: %w", err)
 	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	bytesWritten, err := w.f.WriteAt(data, w.currentSize)
+	bytesWritten, err := w.f.WriteAt(data, w.currentSize.Load())
 	if err != nil {
-		return fmt.Errorf("failed to append entry to wal: %v", err)
+		return fmt.Errorf("failed to append entry to wal: %w", err)
 	}
-	w.currentSize += int64(bytesWritten)
+	w.currentSize.Add(int64(bytesWritten))
 
+	if w.currentSize.Load() >= WALMaxSize {
+		return w.flush()
+	}
 	return nil
 }
 
 func (w *WAL) Size() int64 {
-	return w.currentSize
+	return w.currentSize.Load()
 }
 
 func (w *WAL) Close() error {
@@ -97,21 +97,31 @@ func (w *WAL) ReadAll() ([]Entry, error) {
 	return entries, nil
 }
 
-func (w *WAL) Flusher() error {
+func (w *WAL) Flush() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	return w.flush()
+}
 
-	data, err := w.ReadAll()
+// flush assumes w.mu is held by the caller.
+func (w *WAL) flush() error {
+	// reuse the open fd instead of opening a second one via ReadAll
+	if _, err := w.f.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek wal %s: %w", w.path, err)
+	}
+	data, err := readEntries(w.f)
 	if err != nil {
 		return fmt.Errorf("failed to read from wal %s: %w", w.path, err)
 	}
 
 	sorted := sortTimestamps(data)
 
-	segmentDir := path.Dir(w.path)
-	segmentName := path.Join(segmentDir, strconv.FormatInt(time.Now().Unix(), 10)+".seg")
-	err = WriteSegment(segmentName, sorted)
-	if err != nil {
+	if len(sorted) == 0 {
+		return nil
+	}
+
+	segmentName := segmentFileName(path.Dir(w.path), sorted[0].Timestamp, sorted[len(sorted)-1].Timestamp)
+	if err = WriteSegment(segmentName, sorted); err != nil {
 		return fmt.Errorf("failed to write segment %s: %w", segmentName, err)
 	}
 
@@ -121,7 +131,7 @@ func (w *WAL) Flusher() error {
 	if _, err := w.f.Seek(0, 0); err != nil {
 		return fmt.Errorf("failed to seek wal %s: %w", w.path, err)
 	}
-	w.currentSize = 0
+	w.currentSize.Store(0)
 
 	return nil
 }
