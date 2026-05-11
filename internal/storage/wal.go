@@ -71,13 +71,16 @@ func (w *WAL) Size() int64 {
 }
 
 func (w *WAL) Close() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
 	err := w.f.Sync()
 	if err != nil {
-		return fmt.Errorf("failed to write to file %s: %v", w.path, err)
+		return fmt.Errorf("failed to write to file %s: %w", w.path, err)
 	}
 	err = w.f.Close()
 	if err != nil {
-		return fmt.Errorf("failed to close file %s: %v", w.path, err)
+		return fmt.Errorf("failed to close file %s: %w", w.path, err)
 	}
 	return nil
 }
@@ -135,5 +138,3 @@ func (w *WAL) flush() error {
 
 	return nil
 }
-
-

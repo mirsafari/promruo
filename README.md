@@ -2,7 +2,7 @@
 
 Prometheus Rollup Operator is a lightweight, self-sufficient Kubernetes Operator designed to distill high-resolution Prometheus metrics into long-term, low-resolution data points. It is built for weekly/monthly/yearly trend analysis without the operational overhead of a full-scale long-term storage solution like Thanos, Cortex or Mimir.
 
-> [!CAUTION] 
+> [!CAUTION]
 > **Promruo is an experimental project.** This tool is intended for learning purposes on how TSDB and Kubernetes operator work under the hood. It does not provide the data redundancy, horizontal scaling, or rigorous consistency guarantees of production-grade storage backends.
 
 **What it is:**
@@ -19,3 +19,6 @@ Prometheus Rollup Operator is a lightweight, self-sufficient Kubernetes Operator
 - A Visualization Suite: While it includes a minimal embedded UI for trend checking, it is not a replacement for Grafana.
 - A Real-Time Alerting Engine: Promruo is for historical analysis, not for triggering real-time incident responses.
 - High Availability (by default): Since it relies on local disk persistence and a single-binary storage engine, it prioritizes simplicity over distributed consensus.
+
+> !> [!NOTE]
+> LLMs were only used as a review tool, to find code improvements and fix bugs. All commits that used coding agents are prefixed with `LLM improvements`

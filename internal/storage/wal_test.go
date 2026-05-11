@@ -3,6 +3,7 @@ package storage
 import (
 	"crypto/sha256"
 	"os"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -96,6 +97,49 @@ func TestWAL_ReadAll(t *testing.T) {
 
 	err = wal.Close()
 	require.NoError(t, err)
+}
+
+func TestWAL_ConcurrentAppend(t *testing.T) {
+	dir := t.TempDir()
+	wal, err := OpenWAL(dir + "/active.wal")
+	require.NoError(t, err)
+
+	const goroutines = 10
+	const entriesPerGoroutine = 100
+
+	var wg sync.WaitGroup
+	for i := range goroutines {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			for j := range entriesPerGoroutine {
+				err := wal.Append(&Entry{
+					Timestamp:  int64(id*entriesPerGoroutine + j),
+					Value:      float64(id),
+					MetricHash: sha256.Sum256([]byte("cpu")),
+				})
+				require.NoError(t, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	total := goroutines * entriesPerGoroutine
+	assert.EqualValues(t, total*EntrySize, wal.Size())
+
+	require.NoError(t, wal.Flush())
+
+	segPath := dir + "/0-999.seg"
+	got, err := ReadSegment(segPath)
+	require.NoError(t, err)
+	require.Len(t, got, total)
+
+	for i := range total - 1 {
+		assert.Less(t, got[i].Timestamp, got[i+1].Timestamp,
+			"entries should be sorted by timestamp")
+	}
+
+	require.NoError(t, wal.Close())
 }
 
 func TestWAL_ReopenPreservesData(t *testing.T) {

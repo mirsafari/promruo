@@ -1,12 +1,10 @@
 package storage
 
 import (
-	"cmp"
 	"fmt"
 	"log/slog"
 	"os"
 	"path"
-	"slices"
 	"strconv"
 	"strings"
 )
@@ -106,11 +104,7 @@ func ScanSegments(dir string, hash *[32]byte, start, end int64) ([]Entry, error)
 		}
 	}
 
-	slices.SortFunc(result, func(a, b Entry) int {
-		return cmp.Compare(a.Timestamp, b.Timestamp)
-	})
-
-	return result, nil
+	return sortTimestamps(result), nil
 }
 
 // segmentFileName builds a segment filename encoding the data time range.
