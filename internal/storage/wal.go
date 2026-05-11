@@ -3,8 +3,25 @@ package storage
 import (
 	"fmt"
 	"os"
+	"path"
+	"slices"
+	"strconv"
 	"sync"
+	"time"
 )
+
+func sortTimestamps(data []Entry) []Entry {
+	slices.SortFunc(data, func(a, b Entry) int {
+		if a.Timestamp < b.Timestamp {
+			return -1
+		}
+		if a.Timestamp > b.Timestamp {
+			return 1
+		}
+		return 0
+	})
+	return data
+}
 
 type WAL struct {
 	f           *os.File
@@ -21,6 +38,7 @@ func OpenWAL(path string) (*WAL, error) {
 
 	info, err := file.Stat()
 	if err != nil {
+		_ = file.Close()
 		return nil, fmt.Errorf("failed to get file size for %s: %v", path, err)
 	}
 
@@ -63,3 +81,49 @@ func (w *WAL) Close() error {
 	}
 	return nil
 }
+
+func (w *WAL) ReadAll() ([]Entry, error) {
+	file, err := os.Open(w.path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open wal file %s: %w", w.path, err)
+	}
+	defer func() { _ = file.Close() }()
+
+	entries, err := readEntries(file)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read wal %s: %w", w.path, err)
+	}
+
+	return entries, nil
+}
+
+func (w *WAL) Flusher() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	data, err := w.ReadAll()
+	if err != nil {
+		return fmt.Errorf("failed to read from wal %s: %w", w.path, err)
+	}
+
+	sorted := sortTimestamps(data)
+
+	segmentDir := path.Dir(w.path)
+	segmentName := path.Join(segmentDir, strconv.FormatInt(time.Now().Unix(), 10)+".seg")
+	err = WriteSegment(segmentName, sorted)
+	if err != nil {
+		return fmt.Errorf("failed to write segment %s: %w", segmentName, err)
+	}
+
+	if err := w.f.Truncate(0); err != nil {
+		return fmt.Errorf("failed to truncate wal %s: %w", w.path, err)
+	}
+	if _, err := w.f.Seek(0, 0); err != nil {
+		return fmt.Errorf("failed to seek wal %s: %w", w.path, err)
+	}
+	w.currentSize = 0
+
+	return nil
+}
+
+

@@ -25,6 +25,44 @@ func TestOpenWAL_CreatesFile(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestWAL_Flusher_SortsAndPersists(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/active.wal"
+	wal, err := OpenWAL(path)
+	require.NoError(t, err)
+
+	require.NoError(t, wal.Append(&Entry{Timestamp: 3, Value: 30, MetricHash: sha256.Sum256([]byte("cpu"))}))
+	require.NoError(t, wal.Append(&Entry{Timestamp: 1, Value: 10, MetricHash: sha256.Sum256([]byte("cpu"))}))
+	require.NoError(t, wal.Append(&Entry{Timestamp: 2, Value: 20, MetricHash: sha256.Sum256([]byte("mem"))}))
+
+	require.NoError(t, wal.Flusher())
+
+	// Verify segment file was created
+	entries, err := os.ReadDir(dir)
+	require.NoError(t, err)
+	require.Len(t, entries, 2) // active.wal + one .seg file
+
+	var segFile string
+	for _, e := range entries {
+		if !e.IsDir() && len(e.Name()) > 4 && e.Name()[len(e.Name())-4:] == ".seg" {
+			segFile = dir + "/" + e.Name()
+			break
+		}
+	}
+	require.NotEmpty(t, segFile, "expected a .seg file")
+
+	got, err := ReadSegment(segFile)
+	require.NoError(t, err)
+	require.Len(t, got, 3)
+
+	// Verify sorted by timestamp
+	assert.Equal(t, int64(1), got[0].Timestamp)
+	assert.Equal(t, int64(2), got[1].Timestamp)
+	assert.Equal(t, int64(3), got[2].Timestamp)
+
+	wal.Close()
+}
+
 func TestWAL_AppendIncreasesSize(t *testing.T) {
 	path := t.TempDir() + "/active.wal"
 	wal, err := OpenWAL(path)
@@ -45,6 +83,27 @@ func TestWAL_AppendIncreasesSize(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.EqualValues(t, 96, wal.Size())
+
+	err = wal.Close()
+	require.NoError(t, err)
+}
+
+func TestWAL_ReadAll(t *testing.T) {
+	path := t.TempDir() + "/active.wal"
+	wal, err := OpenWAL(path)
+	require.NoError(t, err)
+
+	entries := []Entry{
+		{Timestamp: 1, Value: 10, MetricHash: sha256.Sum256([]byte("cpu"))},
+		{Timestamp: 2, Value: 20, MetricHash: sha256.Sum256([]byte("mem"))},
+	}
+	for i := range entries {
+		require.NoError(t, wal.Append(&entries[i]))
+	}
+
+	got, err := wal.ReadAll()
+	require.NoError(t, err)
+	assert.Equal(t, entries, got)
 
 	err = wal.Close()
 	require.NoError(t, err)
